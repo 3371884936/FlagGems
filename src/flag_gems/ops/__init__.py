@@ -636,7 +636,7 @@ from flag_gems.ops.zero import zero, zero_out
 from flag_gems.ops.zeros import zero_, zeros
 from flag_gems.ops.zeros_like import zeros_like
 
-from .meshgrid import meshgrid, meshgrid_stack, register_ops
+from .meshgrid import meshgrid,register_ops
 
 __all__ = [
     "SUPPORTED_FP8_DTYPE",
@@ -1375,7 +1375,6 @@ __all__ = [
     "zeros",
     "zeros_like",
     "meshgrid",
-    "meshgrid_stack",
     "register_ops",
 ]
 

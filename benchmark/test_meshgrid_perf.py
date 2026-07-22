@@ -32,7 +32,7 @@ def format_shape(shape):
     return "x".join(str(s) for s in shape)
 
 
-def benchmark(shape, indexing="ij", warmup=200, runs=1000):
+def benchmark(shape, indexing="ij", warmup=50, runs=500):
     """Run performance benchmark"""
     device = get_device()
     shape_str = format_shape(shape)
@@ -67,13 +67,19 @@ def benchmark(shape, indexing="ij", warmup=200, runs=1000):
             result = meshgrid(tensors, indexing=indexing)
             ender.record()
             torch.cuda.synchronize()
-            _ = result
+            # Ensure result is computed
+            _ = result[0].cpu() if result else None
             our_times.append(starter.elapsed_time(ender))
         else:
             start = time.perf_counter()
             result = meshgrid(tensors, indexing=indexing)
             _ = result
             our_times.append((time.perf_counter() - start) * 1000)
+
+    # Clear cache
+    if device == "cuda":
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
 
     # Then test PyTorch
     for _ in range(runs):
@@ -82,7 +88,7 @@ def benchmark(shape, indexing="ij", warmup=200, runs=1000):
             result = torch.meshgrid(tensors, indexing=indexing)
             ender.record()
             torch.cuda.synchronize()
-            _ = result
+            _ = result[0].cpu() if result else None
             torch_times.append(starter.elapsed_time(ender))
         else:
             start = time.perf_counter()
@@ -90,22 +96,27 @@ def benchmark(shape, indexing="ij", warmup=200, runs=1000):
             _ = result
             torch_times.append((time.perf_counter() - start) * 1000)
 
+    # Filter outliers (remove top and bottom 5%)
+    our_times_sorted = sorted(our_times)
+    torch_times_sorted = sorted(torch_times)
+    cut = int(0.05 * len(our_times_sorted))
+    our_times_filtered = our_times_sorted[cut:-cut] if cut > 0 else our_times_sorted
+    torch_times_filtered = torch_times_sorted[cut:-cut] if cut > 0 else torch_times_sorted
+
     # Statistics
-    our_median = np.median(our_times)
-    torch_median = np.median(torch_times)
-    speedup = torch_median / our_median
+    our_median = np.median(our_times_filtered) if our_times_filtered else np.median(our_times)
+    torch_median = np.median(torch_times_filtered) if torch_times_filtered else np.median(torch_times)
+    speedup = torch_median / our_median if our_median > 0 else 0
 
     # Calculate percentage difference
-    pct_diff = (our_median - torch_median) / torch_median * 100
+    pct_diff = (our_median - torch_median) / torch_median * 100 if torch_median > 0 else 0
 
     print(f"  FlagGems (median): {our_median:.4f} ms")
     print(f"  PyTorch  (median): {torch_median:.4f} ms")
     print(f"  Speedup:           {speedup:.2f}x")
     print(f"  Difference:        {pct_diff:+.1f}%")
-    print(f"  (FlagGems mean±std: {np.mean(our_times):.4f}±{np.std(our_times):.4f} ms)")
-    print(
-        f"  (PyTorch mean±std:  {np.mean(torch_times):.4f}±{np.std(torch_times):.4f} ms)"
-    )
+    print(f"  (FlagGems mean+-std: {np.mean(our_times):.4f}+-{np.std(our_times):.4f} ms)")
+    print(f"  (PyTorch mean+-std:  {np.mean(torch_times):.4f}+-{np.std(torch_times):.4f} ms)")
 
     return our_median, torch_median, speedup
 
@@ -118,20 +129,24 @@ def main():
     print(f"PyTorch Version: {torch.__version__}")
     print("=" * 70)
 
-    # Test cases
+    # Test cases focusing on common usage patterns
     cases = [
+        # 2D cases
         ((10, 10), "ij"),
         ((10, 10), "xy"),
-        ((20, 20), "ij"),
-        ((50, 50), "ij"),
-        ((100, 100), "ij"),
-        ((200, 200), "ij"),
-        ((500, 500), "ij"),
-        ((1000, 1000), "ij"),
+        ((32, 32), "ij"),
+        ((64, 64), "ij"),
+        ((128, 128), "ij"),
+        ((256, 256), "ij"),
+        ((512, 512), "ij"),
+        ((1024, 1024), "ij"),
+        # 3D cases
+        ((16, 16, 16), "ij"),
         ((32, 32, 32), "ij"),
-        ((32, 32, 32), "xy"),
-        ((10, 10, 10, 10), "ij"),  # 4D
-        ((5, 5, 5, 5, 5), "ij"),  # 5D
+        ((64, 64, 64), "ij"),
+        # 4D cases
+        ((8, 8, 8, 8), "ij"),
+        ((16, 16, 16, 16), "ij"),
     ]
 
     all_results = []
@@ -141,7 +156,9 @@ def main():
             our_time, torch_time, speedup = benchmark(shape, indexing)
             all_results.append((shape, indexing, speedup, our_time, torch_time))
         except Exception as e:
-            print(f"  ⚠️  Benchmark failed for {shape}: {e}")
+            print(f"  [WARNING] Benchmark failed for {shape}: {e}")
+            import traceback
+            traceback.print_exc()
         print("-" * 70)
 
     # Summary
@@ -154,21 +171,23 @@ def main():
     total_speedup = 0
     count = 0
     fast_count = 0
+    excellent_count = 0
 
     for shape, indexing, speedup, our_time, torch_time in all_results:
         shape_str = format_shape(shape)
-        if speedup >= 1.2:
-            status = "🚀 EXCELLENT"
+        if speedup >= 1.5:
+            status = "EXCELLENT"
+            excellent_count += 1
             fast_count += 1
-        elif speedup >= 1.05:
-            status = "✅ GOOD"
+        elif speedup >= 1.1:
+            status = "GOOD"
             fast_count += 1
         elif speedup >= 0.95:
-            status = "✅ PASS"
+            status = "PASS"
         else:
-            status = "⚠️  SLOW"
+            status = "SLOW"
         print(f"{shape_str:<15} {indexing:<6} {speedup:>6.2f}x     {status}")
-        if speedup > 0.5:
+        if speedup > 0.01:
             total_speedup += speedup
             count += 1
 
@@ -176,7 +195,8 @@ def main():
         avg_speedup = total_speedup / count
         print("-" * 70)
         print(f"Average Speedup:     {avg_speedup:.2f}x")
-        print(f"Fast Cases (>1.05x): {fast_count}/{len(all_results)}")
+        print(f"Fast Cases (>1.1x):  {fast_count}/{len(all_results)}")
+        print(f"Excellent (>1.5x):   {excellent_count}/{len(all_results)}")
 
     print("=" * 70)
     print("Note: Speedup = PyTorch_time / FlagGems_time")
@@ -186,4 +206,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

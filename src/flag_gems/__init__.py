@@ -33,7 +33,7 @@ from flag_gems.runtime import flagtune
 from flag_gems.runtime.backend import SpecOpRegistrar
 from flag_gems.runtime.op_registrar import GeneralOpRegistrar
 
-from .ops.meshgrid import meshgrid, meshgrid_stack, register_ops
+from .ops.meshgrid import meshgrid, register_ops
 
 try:
     from flag_gems._version import version as __version__
